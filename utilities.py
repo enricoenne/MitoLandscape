@@ -14,6 +14,10 @@ from skimage.exposure import rescale_intensity, histogram
 from skimage.morphology import skeletonize
 from skimage import filters
 
+from skimage.measure import marching_cubes, mesh_surface_area, perimeter_crofton
+from scipy.spatial import SphericalVoronoi
+from scipy import ndimage as ndi
+
 # skeleton analysis
 from scipy.ndimage import convolve, label, distance_transform_edt, generate_binary_structure, binary_dilation
 import networkx as nx
@@ -44,6 +48,8 @@ from collections import Counter
 
 import requests
 from pathlib import Path
+
+from collections import Counter
 
 ###########################################################
 '''input utilities'''
@@ -107,7 +113,7 @@ def get_zenodo(filename_prefix, output_dir = Path.cwd() / 'example_data'):
 
     print('download complete')
 
-    return str(output_dir)
+    return output_dir
 
 ###########################################################
 '''plotting utilities'''
@@ -336,11 +342,6 @@ def connected_annotation(vol, seed):
 
     return labeled_array, num_components
 
-
-###########################################################
-'''compartment annotation'''
-###########################################################
-
 def cell_annotation(cell_mask, cell_soma_mask):
     '''
     returns:
@@ -426,11 +427,7 @@ def apical_progenitor_compartment_annotation(cell_mask, cell_soma_mask, soma_dis
 '''core analysis'''
 ###########################################################
 def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, cell_suffix, soma_suffix, vent_suffix, info, h5_flag = False):
-    '''
-    function for mitochondrial apical radial glia analysis in picture
-
-    the compartments are based on the ventricular distance and apico-basal position
-    '''
+    #print(picture_name)
 
     # read mitochondrial channel
     img_mito, res = get_picture(folder_name + '/' + picture_name + mito_suffix)
@@ -599,12 +596,6 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
     return results_pic, results_mito_pic, a_process_df, b_process_df
 
 def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_suffix, cell_suffix, nucl_suffix, info, h5_flag = False):
-    '''
-    function for mitochondrial cell analysis in picture
-
-    compartments are not calculated
-    '''
-
 
     # read mitochondrial channel
     img_mito, res = get_picture(folder_name + '/' + picture_name + mito_suffix)
@@ -714,7 +705,7 @@ def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_su
 
     return results_pic, results_mito_pic
 
-def cell_analysis(mito_bin, label_masks, soma_dist, res):
+def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
     '''
     analysis of mito inside a cell
     label_masks: subcellular components to consider to organize mito info
@@ -729,24 +720,37 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res):
     results_mito_cell = pd.DataFrame()
 
     # mitochondria results
-    element_n, element_info = mito_analysis(mito_bin, res)
+    mito_bin = mito_bin.astype(bool)
+    element_n, element_info, _ = mito_analysis(mito_bin, res, minimum_vol = minimum_vol)
 
 
     if element_n == 0:
         results_mito_cell.loc[0, 'mito_label'] = np.nan
         results_mito_cell.loc[0, 'n_branches'] = np.nan
         results_mito_cell.loc[0, 'n_junctions'] = np.nan
+        results_mito_cell.loc[0, 'n_endpoints'] = np.nan
+        results_mito_cell.loc[0, 'volume'] = np.nan
         results_mito_cell.loc[0, 'length'] = np.nan
+        results_mito_cell.loc[0, 'diameter'] = np.nan
+        results_mito_cell.loc[0, 'surface'] = np.nan
+        results_mito_cell.loc[0, 'sphericity'] = np.nan
         results_mito_cell.loc[0, 'soma_dist'] = np.nan
         results_mito_cell.loc[0, 'compartment'] = np.nan
         results_mito_cell.loc[0, 'element_type'] = np.nan
+        results_mito_cell.loc[0, 'skel_voxels'] = np.nan
     else:
         for m in range(element_n):
             results_mito_cell.loc[m, 'mito_label'] = m
             results_mito_cell.loc[m, 'n_branches'] = element_info['branches'][m]
             results_mito_cell.loc[m, 'n_junctions'] = element_info['junctions'][m]
+            results_mito_cell.loc[m, 'n_endpoints'] = element_info['endpoints'][m]
+            results_mito_cell.loc[m, 'volume'] = element_info['volume'][m]
             results_mito_cell.loc[m, 'length'] = element_info['length'][m]
+            results_mito_cell.loc[m, 'diameter'] = element_info['diameter'][m]
+            results_mito_cell.loc[m, 'surface'] = element_info['surface'][m]
+            results_mito_cell.loc[m, 'sphericity'] = element_info['sphericity'][m]
             results_mito_cell.loc[m, 'soma_dist'] = soma_dist[element_info['coords'][m]]
+            results_mito_cell.loc[m, 'skel_voxels'] = element_info['skel_voxels'][m]
 
             results_mito_cell.loc[m, 'compartment'] = label_masks[element_info['coords'][m]]
 
@@ -760,6 +764,7 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res):
 
 
     ##################
+    results_mito_cell = results_mito_cell.replace([np.inf, -np.inf], np.nan)
 
 
     for comp in labels:
@@ -769,7 +774,8 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res):
         results_cell.loc[comp-1, 'compartment'] = comp
 
         results_cell.loc[comp-1, 'volume'] = np.sum(current_compartment)*voxel_vol
-        results_cell.loc[comp-1, 'mito_volume'] = np.sum(apply_mask(mito_bin, current_compartment))*voxel_vol
+        results_cell.loc[comp-1, 'mito_volume'] = current_compartment_mito['volume'].sum()
+        results_cell.loc[comp-1, 'avg_mito_volume'] = current_compartment_mito['volume'].mean()
         soma_dist_on_current = ma.masked_array(soma_dist, ~current_compartment)
 
         # the length is not super accurate for cycling objects, in that case I need to use the length from the skeleton
@@ -798,17 +804,63 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res):
         results_cell.loc[comp-1, 'num_n'] = num_n
 
         results_cell.loc[comp-1, 'mito_length'] = current_compartment_mito['length'].sum()
+        results_cell.loc[comp-1, 'avg_mito_length'] = current_compartment_mito['length'].mean()
+
+        results_cell.loc[comp-1, 'avg_volume'] = current_compartment_mito['volume'].mean()
+
+        try:
+            results_cell.loc[comp-1, 'avg_diameter'] = np.average(current_compartment_mito['diameter'], weights=current_compartment_mito['skel_voxels'])
+        except ZeroDivisionError:
+            results_cell.loc[comp-1, 'avg_diameter'] = np.nan
+
+
+
+        results_cell.loc[comp-1, 'tot_surface'] = current_compartment_mito['surface'].sum()
+        results_cell.loc[comp-1, 'avg_surface'] = current_compartment_mito['surface'].mean()
+
+        # weighted sphericity (by volume)
+        try:
+            results_cell.loc[comp-1, 'avg_sphericity'] = np.average(current_compartment_mito['sphericity'], weights=current_compartment_mito['volume'])
+        except ZeroDivisionError:
+            results_cell.loc[comp-1, 'avg_sphericity'] = np.nan
+
+        results_cell.loc[comp-1, 'tot_n_branches'] = current_compartment_mito['n_branches'].sum()
+        results_cell.loc[comp-1, 'avg_n_branches'] = current_compartment_mito['n_branches'].mean()
+
+        if current_compartment_mito['n_branches'].sum() != 0:
+            results_cell.loc[comp-1, 'avg_branches_length'] = current_compartment_mito['length'].sum() / current_compartment_mito['n_branches'].sum()
+        else:
+            results_cell.loc[comp-1, 'avg_branches_length'] = np.nan
+
+        results_cell.loc[comp-1, 'tot_n_junctions'] = current_compartment_mito['n_junctions'].sum()
+        results_cell.loc[comp-1, 'avg_n_junctions'] = current_compartment_mito['n_junctions'].mean()
+
+        results_cell.loc[comp-1, 'tot_n_endpoints'] = current_compartment_mito['n_endpoints'].sum()
+        results_cell.loc[comp-1, 'avg_n_endpoints'] = current_compartment_mito['n_endpoints'].mean()
+
     
     return results_cell, results_mito_cell
 
-def mito_analysis(mito_bin, res):
+def mito_analysis(mito_bin, res, minimum_vol = 0):
     # just to make sure everything is boolean
     mito_bin = mito_bin.astype(bool)
+
+    minimum_vox = minimum_vol / np.prod(res)
+
+    # number and labels of connected components in mitochondria binary image
+    # 26-connectivity = full 3x3x3 neighborhood
+    structure = np.ones((3, 3, 3), dtype=bool)
+    labels_bin, num_bin = label(mito_bin, structure=structure)
+    for l in np.unique(labels_bin):
+        current_l = labels_bin==l
+        current_vox = np.sum(current_l)
+        if current_vox < minimum_vox:
+            mito_bin[current_l] = False
 
     # skeletonized mitochondria
     mito_ske = skeletonize(mito_bin)
 
-    #show_pic(mito_ske, 'skeleton')
+    # show_pic(mito_ske, 'skeleton')
 
     mito_G = graph_from_skeleton(mito_ske, res)
 
@@ -820,31 +872,129 @@ def mito_analysis(mito_bin, res):
 
     element_coords = from_graph_to_element_centers(mito_G)
 
+    # this compact linear tracts into single edges
     simplified_G = graph_simplifier(mito_G)
-
-
 
 
     element_info = calculate_branches_and_junctions(simplified_G)
     element_info_array = np.array(element_info)
 
+
     element_lengths = calculate_real_length(mito_G)
 
-    element_n = len(element_coords)
+
+
+
+    skel_elements = list(nx.connected_components(mito_G))
+
+
+    # there could be problems in case a skeleton is disconnected, but not the skeleton or viceversa
+    # print(labeles_bin[graph_elements[0]])
+
+
+    element_n = len(element_lengths)
+    # labels start at 1
+    skel_labels = list(range(1, element_n + 1))
+    element_volumes = np.zeros((element_n))
+
+    blob_labels = []
+
+    for element in skel_elements:
+
+        graph_element = list(element)
+        node_coords = tuple(np.array(graph_element).T)
+
+        # we are using 26 connectivity, it's impossible that a single skeleton element spans two connected components
+        blob_labels.append(np.unique(labels_bin[node_coords])[0])
+
+    annotated_mito = np.zeros_like(mito_bin, dtype=int)
+
+
+    counts = Counter(blob_labels)
+    repeated_blob_labels = [num for num, count in counts.items() if count>1]
+
+    for i, skel_element in enumerate(skel_elements):
+        current_blob_l = blob_labels[i]
+        current_skel_l = i+1
+
+        # set labels of the skel network
+        nx.set_node_attributes(mito_G, {node: current_skel_l for node in skel_element}, 'label')
+
+        # if network element is the only one in the blob, we can measure the volume
+        if current_blob_l not in repeated_blob_labels:
+
+            node_coords = tuple(np.array(list(skel_element)).T)
+            annotated_mito[labels_bin == current_blob_l] = current_skel_l
+
+
+    for blob_label in repeated_blob_labels:
+        # blob considered
+        current_blob = labels_bin == blob_label
+        
+
+        current_annotation = masked_voronoi_from_points(current_blob, mito_G, 'label')
+        annotated_mito[current_blob] = current_annotation[current_blob]
+
+
+    element_areas = []
+    element_diameters = []
+    element_skel_voxels = []
+    for l in skel_labels:
+        current_blob = annotated_mito == l
+
+        current_box = bounding_box(current_blob)
+        current_blob = current_blob[current_box]
+
+        current_blob = np.pad(current_blob, pad_width=1, mode="constant", constant_values=False)
+
+        current_skel_nx = skel_elements[l-1]
+
+        node_coords_pre = tuple(np.array(list(current_skel_nx)).T)
+        node_coords = to_local(node_coords_pre, current_box)
+
+
+        # calculating distance from surface within the mitochondria
+        surface_dist = distance_transform_edt(current_blob, sampling= res)
+
+        # show_pic(surface_dist)
+        
+        element_diameters.append(np.mean(surface_dist[node_coords])*2)
+        
+        element_volumes[l-1] = np.sum(current_blob)*np.prod(res)
+
+        element_areas.append(surface_area_crofton(current_blob, res))
+        element_skel_voxels.append(len(node_coords))
+
+
+
+
+    element_volumes = np.array(element_volumes)
+    element_lengths = np.array(element_lengths)
+    element_areas = np.array(element_areas)
 
     mito_output = {
         'coords': element_coords,
-        'length': element_lengths}
+        'volume': element_volumes,
+        'length': element_lengths,
+        'diameter': element_diameters,
+        'surface': element_areas,
+        'sphericity': sphericity(element_volumes, element_areas),
+        'skel_voxels': element_skel_voxels}
     
+    # print(mito_output)
+
     try:
         mito_output['branches'] = element_info_array[:,0]
         mito_output['junctions'] = element_info_array[:,1]
+        mito_output['endpoints'] = element_info_array[:,2]
 
     except IndexError:
         mito_output['branches'] = []
         mito_output['junctions'] = []
+        mito_output['endpoints'] = []
 
-    return element_n, mito_output
+
+    return element_n, mito_output, simplified_G
 
 def process_analysis(process_mask, soma_dist, mito_bin, res, step = 0.5):
     dist_in_process = apply_mask(soma_dist, process_mask)
@@ -877,6 +1027,242 @@ def process_analysis(process_mask, soma_dist, mito_bin, res, step = 0.5):
     # range of distances, process volume, mito volume
     return span[:-1], vol_bins, mito_bins
 
+def surface_area_mesh(blob, res):
+    '''
+    compute surface area of a 3d binary object
+
+    parameters
+    blob: 3d np.ndarray boolean
+    res: voxel resolution
+
+    returns surface area
+    '''
+    padded_blob = np.pad(blob, pad_width=1, mode="constant", constant_values=False)
+
+    verts, faces, _, _ = marching_cubes(padded_blob, level=0.5, spacing=res)
+
+    area = mesh_surface_area(verts, faces)
+
+    return area
+
+def surface_area_crofton(image, res):
+    res = (res[2], res[1], res[0])
+    # convert to binary
+    img = (image > 0).astype(np.uint8)
+    # pad to avoid boundary issues
+    img = np.pad(img, pad_width=1, mode='constant', constant_values=0)
+
+    # 2x2x2 neighborhood convolution to get configuration index
+    kernel = np.zeros((2,2,2), dtype=np.uint8)
+    for i in range(2):
+        for j in range(2):
+            for k in range(2):
+                kernel[i,j,k] = 2**(i*4 + j*2 + k)
+    XF = ndi.convolve(img, kernel, mode='constant', cval=0)
+
+     # histogram of 256 possible configurations
+    h = np.bincount(XF.ravel(), minlength=256)
+
+    # get direction weights
+    weights = crofton_weights(res)
+
+    # initialize LUT for all 256 configurations
+    LUT = np.zeros(256)
+    
+    # loop over all 256 configurations
+    for config in range(256):
+        # extract 2x2x2 binary tile
+        tile = np.array([[[(config >> (z*4 + y*2 + x)) & 1 for x in range(2)] for y in range(2)] for z in range(2)], dtype=np.uint8)
+
+        kei = np.zeros(7)
+        vol = np.prod(res)
+        d1, d2, d3 = res
+        d12 = np.hypot(d1,d2)
+        d13 = np.hypot(d1,d3)
+        d23 = np.hypot(d2,d3)
+        d123 = np.sqrt(d1**2 + d2**2 + d3**2)
+
+        for z in range(2):
+            for y in range(2):
+                for x in range(2):
+                    if tile[z,y,x] == 0:
+                        continue
+                    # isothetic directions
+                    kei[0] = 0 if tile[z,y,1-x] else vol/(d1*8.0)
+                    kei[1] = 0 if tile[z,1-y,x] else vol/(d2*8.0)
+                    kei[2] = 0 if tile[1-z,y,x] else vol/(d3*8.0)
+                    # diagonals sharing a square face
+                    kei[3] = 0 if tile[z,1-y,1-x] else vol/(d12*4.0)
+                    kei[4] = 0 if tile[1-z,y,1-x] else vol/(d13*4.0)
+                    kei[5] = 0 if tile[1-z,1-y,x] else vol/(d23*4.0)
+                    # diagonal across cube
+                    kei[6] = 0 if tile[1-z,1-y,1-x] else vol/(d123*2.0)
+                    # sum contributions
+                    LUT[config] += 4 * np.sum(kei * weights)
+
+    # apply LUT to histogram
+    total_surface = np.dot(LUT, h)
+    return total_surface
+
+def crofton_lut(res):
+    d1, d2, d3 = res
+    vol = d1 * d2 * d3
+
+    d12 = math.hypot(d1, d2)
+    d13 = math.hypot(d1, d3)
+    d23 = math.hypot(d2, d3)
+    d123 = math.hypot(d12, d3)
+
+    weights = crofton_weights(res)
+    lut = np.zeros(256, dtype=float)
+
+    for iConfig in range(256):
+        im = np.zeros((2, 2, 2), dtype=bool)
+        for b in range(8):
+            if (iConfig >> b) & 1:
+                z = (b >> 2) & 1
+                y = (b >> 1) & 1
+                x = b & 1
+                im[z, y, x] = True
+
+        val = 0.0
+        for z in range(2):
+            for y in range(2):
+                for x in range(2):
+                    if not im[z, y, x]:
+                        continue
+
+                    kei = np.zeros(7)
+                    # isothetic directions
+                    kei[0] = 0.0 if im[z, y, 1 - x] else vol / d1 / 8.0
+                    kei[1] = 0.0 if im[z, 1 - y, x] else vol / d2 / 8.0
+                    kei[2] = 0.0 if im[1 - z, y, x] else vol / d3 / 8.0
+
+                    # diagonals sharing a square face
+                    kei[3] = 0.0 if im[z, 1 - y, 1 - x] else vol / d12 / 4.0
+                    kei[4] = 0.0 if im[1 - z, y, 1 - x] else vol / d13 / 4.0
+                    kei[5] = 0.0 if im[1 - z, 1 - y, x] else vol / d23 / 4.0
+
+                    # diagonal with opposite vertex
+                    kei[6] = 0.0 if im[1 - z, 1 - y, 1 - x] else vol / d123 / 2.0
+
+                    # Multiply by 4 * weights per Java code
+                    val += 4.0 * np.sum(kei * weights)
+
+        lut[iConfig] = val
+
+    return lut
+
+def crofton_weights(res):
+    """
+    Compute 3D Crofton direction weights (13 directions) for given voxel sizes.
+
+    Parameters
+    ----------
+    res : tuple or list
+        (dx, dy, dz) voxel sizes.
+
+    Returns
+    -------
+    weights : ndarray of shape (7,)
+        Crofton weights for the 7 direction groups.
+    """
+    dx, dy, dz = res
+    weights = np.zeros(7)
+
+    # Cubic voxel shortcut
+    if dx == dy == dz:
+        weights[:] = [
+            0.04577789120476 * 2,  # Ox
+            0.04577789120476 * 2,  # Oy
+            0.04577789120476 * 2,  # Oz
+            0.03698062787608 * 2,  # Oxy
+            0.03698062787608 * 2,  # Oxz
+            0.03698062787608 * 2,  # Oyz
+            0.03519563978232 * 2   # Oxyz
+        ]
+        return weights
+
+    # Define all 19 reference vectors (normalized)
+    vPNN = np.array([ dx, -dy, -dz], dtype=float); vPNN /= np.linalg.norm(vPNN)
+    vPZN = np.array([ dx,  0, -dz], dtype=float); vPZN /= np.linalg.norm(vPZN)
+    vNPN = np.array([-dx,  dy, -dz], dtype=float); vNPN /= np.linalg.norm(vNPN)
+    vZPN = np.array([ 0,  dy, -dz], dtype=float); vZPN /= np.linalg.norm(vZPN)
+    vPPN = np.array([ dx,  dy, -dz], dtype=float); vPPN /= np.linalg.norm(vPPN)
+    
+    vPNZ = np.array([ dx, -dy, 0], dtype=float); vPNZ /= np.linalg.norm(vPNZ)
+    vPZZ = np.array([ dx,  0, 0], dtype=float); vPZZ /= np.linalg.norm(vPZZ)
+    vNPZ = np.array([-dx, dy, 0], dtype=float); vNPZ /= np.linalg.norm(vNPZ)
+    vZPZ = np.array([ 0, dy, 0], dtype=float); vZPZ /= np.linalg.norm(vZPZ)
+    vPPZ = np.array([ dx, dy, 0], dtype=float); vPPZ /= np.linalg.norm(vPPZ)
+    
+    vNNP = np.array([-dx, -dy, dz], dtype=float); vNNP /= np.linalg.norm(vNNP)
+    vZNP = np.array([ 0, -dy, dz], dtype=float); vZNP /= np.linalg.norm(vZNP)
+    vPNP = np.array([ dx, -dy, dz], dtype=float); vPNP /= np.linalg.norm(vPNP)
+    vNZP = np.array([-dx, 0, dz], dtype=float); vNZP /= np.linalg.norm(vNZP)
+    vZZP = np.array([ 0, 0, dz], dtype=float); vZZP /= np.linalg.norm(vZZP)
+    vPZP = np.array([ dx, 0, dz], dtype=float); vPZP /= np.linalg.norm(vPZP)
+    vNPP = np.array([-dx, dy, dz], dtype=float); vNPP /= np.linalg.norm(vNPP)
+    vZPP = np.array([ 0, dy, dz], dtype=float); vZPP /= np.linalg.norm(vZPP)
+    vPPP = np.array([ dx, dy, dz], dtype=float); vPPP /= np.linalg.norm(vPPP)
+
+    # Compute weights using spherical_voronoi_domain_area
+    weights[0] = spherical_voronoi_domain_area(vPZZ, [vPNN, vPNZ, vPNP, vPZP, vPPP, vPPZ, vPPN, vPZN]) / (2*np.pi)
+    weights[1] = spherical_voronoi_domain_area(vZPZ, [vPPZ, vPPP, vZPP, vNPP, vNPZ, vNPN, vZPN, vPPN]) / (2*np.pi)
+    weights[2] = spherical_voronoi_domain_area(vZZP, [vPZP, vPPP, vZPP, vNPP, vNZP, vNNP, vZNP, vPNP]) / (2*np.pi)
+    weights[3] = spherical_voronoi_domain_area(vPPZ, [vPZZ, vPPP, vZPZ, vPPN]) / (2*np.pi)
+    weights[4] = spherical_voronoi_domain_area(vPZP, [vPZZ, vPPP, vZZP, vPNP]) / (2*np.pi)
+    weights[5] = spherical_voronoi_domain_area(vZPP, [vZPZ, vNPP, vZZP, vPPP]) / (2*np.pi)
+    weights[6] = spherical_voronoi_domain_area(vPPP, [vPZP, vZZP, vZPP, vZPZ, vPPZ, vPZZ]) / (2*np.pi)
+
+    return weights
+
+def spherical_polygon_area(points, radius=1.0):
+    points = points / np.linalg.norm(points, axis=1)[:, None]
+    n = len(points)
+    angles = []
+
+    for i in range(n):
+        v1 = points[i - 1]
+        v2 = points[i]
+        v3 = points[(i + 1) % n]
+
+        a = np.cross(v2, v1); a /= np.linalg.norm(a)
+        b = np.cross(v2, v3); b /= np.linalg.norm(b)
+        angle = np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))
+        angles.append(angle)
+
+    return (sum(angles) - (n - 2) * np.pi) * radius**2
+
+def spherical_voronoi_domain_area(germ, neighbors, radius=1.0, center=np.array([0,0,0])):
+    """
+    Equivalent to the Java sphericalVoronoiDomainArea:
+    germ: 3D vector (numpy array)
+    neighbors: list/array of 3D vectors
+    """
+    # Combine germ with its neighbors to build local Voronoi diagram
+    points = np.vstack([germ] + list(neighbors))
+    points = points / np.linalg.norm(points, axis=1)[:, None]
+
+    sv = SphericalVoronoi(points, radius=radius, center=center)
+    sv.sort_vertices_of_regions()
+
+    # Germ is at index 0
+    germ_region = sv.regions[0]
+    region_points = sv.vertices[germ_region]
+
+    return spherical_polygon_area(region_points, radius)
+
+def sphericity(volumes, surfaces):
+    volumes = np.asarray(volumes, dtype = float)
+    surfaces = np.asarray(surfaces, dtype=float)
+    return(np.pi**(1) * (6*volumes)**(2)) / surfaces**3
+
+def to_local(coords, bbox, pad=1):
+    starts = np.array([(sl.start or 0) for sl in bbox], dtype=int)
+
+    if isinstance(coords, tuple) and len(coords) == 3:
+        return tuple(np.asarray(c) - s + pad for c, s in zip(coords, starts))
 
 ###########################################################
 '''mitochondrial network managing'''
@@ -928,8 +1314,10 @@ def calculate_branches_and_junctions(G):
         
         # count the number of junction points (degree >= 3)
         num_junctions = sum(1 for node in subgraph if subgraph.degree(node) >= 3)
+
+        num_endpoints = sum(1 for node in subgraph if subgraph.degree(node) == 1)
         
-        element_info.append([num_branches, num_junctions])
+        element_info.append([num_branches, num_junctions, num_endpoints])
     
     return element_info
 
@@ -1034,8 +1422,8 @@ def calculate_real_length(G):
 
     for element in nx.connected_components(G):
         length = 0.0
-        subgraph = G.subgraph(element)  # Get the subgraph corresponding to this element
-        # Sum the weights of all edges in the subgraph
+        subgraph = G.subgraph(element)  # get the subgraph corresponding to this element
+        # sum the weights of all edges in the subgraph
         for (u, v, d) in subgraph.edges(data=True):
             length += d['weight']
         element_lengths_real.append(length)
@@ -1320,12 +1708,6 @@ def graph_linear_components(G, th_length = 0):
     }
     return output
 
-
-
-###########################################################
-'''functions to perform strahler analysis'''
-###########################################################
-
 def masked_voronoi_from_points(mask_pic, pixel_graph, attribute, show=False):
     '''
     masked_voronoi_from_points produces the voronoi diagram, where subset of points are aggregate under the same attribute value
@@ -1386,6 +1768,7 @@ def masked_voronoi_from_points(mask_pic, pixel_graph, attribute, show=False):
     voronoi_output = ma.masked_array(voronoi_output, ~mask_pic)
 
     return voronoi_output
+
 
 def strahler_analysis(mask, soma, res, compartment_annotation=None, show = False):
     # we need the same network structure, for this reason we use the G_strahler that doesn't have loops
@@ -1450,6 +1833,10 @@ def strahler_analysis(mask, soma, res, compartment_annotation=None, show = False
 
     return branching_df, G
 
+
+###########################################################
+'''functions to perform strahler analysis'''
+###########################################################
 def strahler_network(mask, soma, res, show = False):
     mask = mask.astype(bool)
 
