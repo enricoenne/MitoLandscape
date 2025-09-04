@@ -994,7 +994,7 @@ def mito_analysis(mito_bin, res, minimum_vol = 0):
         mito_output['endpoints'] = []
 
 
-    return element_n, mito_output, simplified_G
+    return element_n, mito_output, mito_G
 
 def process_analysis(process_mask, soma_dist, mito_bin, res, step = 0.5):
     dist_in_process = apply_mask(soma_dist, process_mask)
