@@ -79,9 +79,7 @@ def read_h5(filepath):
 
     return np.transpose(dataset, (1, 2, 0))
 
-def get_zenodo(filename_prefix, output_dir = Path.cwd() / 'example_data'):
-    doi = '10.5281/zenodo.16037032'
-
+def get_zenodo(filename_prefix, output_dir = Path.cwd() / 'example_data', doi = '10.5281/zenodo.16037032'):
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -441,6 +439,8 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
     img_vent = get_picture(folder_name + '/' + picture_name + vent_suffix)[0]
 
     img_mito_bin = read_h5(folder_name + '/' + picture_name + mito_bin_suffix)
+    img_mito_bin = booleanizer(img_mito_bin)
+
 
     info_cell = get_masks(img_cell)
     cell_labels = info_cell[0]
@@ -515,6 +515,12 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
 
         # computing distance from soma
         soma_dist = geodesic_dist(cell_mask, cell_soma_mask, res)
+
+        # show_pic(soma_dist, title=picture_name + '_' + str(cell_label))
+
+        # plt.imshow(np.amax(soma_dist, axis=2))
+        # plt.savefig(f'C:/Users/USUARIO/Documents/github/mito_pics2/results/pics/{picture_name}_{str(cell_label)}.png')
+        # plt.close()
     
         print(' - distance', end='')
 
@@ -526,6 +532,7 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
 
         results_cell = cell_tables[0]
         results_mito_cell = cell_tables[1]
+
 
         # these are values common for all the rows of the same cell, so let's add them at the end
         #################################
@@ -544,6 +551,7 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
         
         results_cell.loc[:,'cell_dist'] = cell_dist
         results_cell.loc[:,'vent_perc'] = cell_dist / info['vent_thick']
+
 
 
         
@@ -576,14 +584,19 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
             b_process_cell_df = pd.DataFrame({'range': b_range, 'vol': b_data, 'mito_vol': b_mito_data})
             #b_process_df.to_csv('results/processes/' + results_cell.loc[0, 'cell_code'] +'_basal.csv')
         
-        a_process_cell_df.loc[:,'pict_code'] = picture_name
-        a_process_cell_df.loc[:,'cell_label'] = cell_label
-        a_process_cell_df.loc[:,'cell_code'] = picture_name + '_' + str(cell_label)
-
-        b_process_cell_df.loc[:,'pict_code'] = picture_name
-        b_process_cell_df.loc[:,'cell_label'] = cell_label
-        b_process_cell_df.loc[:,'cell_code'] = picture_name + '_' + str(cell_label)
-
+        try:
+            a_process_cell_df.loc[:,'pict_code'] = picture_name
+            a_process_cell_df.loc[:,'cell_label'] = cell_label
+            a_process_cell_df.loc[:,'cell_code'] = picture_name + '_' + str(cell_label)
+        except:
+            pass
+        
+        try:
+            b_process_cell_df.loc[:,'pict_code'] = picture_name
+            b_process_cell_df.loc[:,'cell_label'] = cell_label
+            b_process_cell_df.loc[:,'cell_code'] = picture_name + '_' + str(cell_label)
+        except:
+            pass
 
         results_mito_pic = pd.concat([results_mito_pic, results_mito_cell])
         results_pic = pd.concat([results_pic, results_cell])
@@ -591,11 +604,11 @@ def picture_analysis(folder_name, picture_name, mito_suffix, mito_bin_suffix, ce
         a_process_df = pd.concat([a_process_df, a_process_cell_df])
         b_process_df = pd.concat([b_process_df, b_process_cell_df])
 
-        print(' - DONE')
+        # print(' - DONE')
 
     return results_pic, results_mito_pic, a_process_df, b_process_df
 
-def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_suffix, cell_suffix, nucl_suffix, info, h5_flag = False):
+def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_suffix, cell_suffix, nucl_suffix, h5_flag = True):
 
     # read mitochondrial channel
     img_mito, res = get_picture(folder_name + '/' + picture_name + mito_suffix)
@@ -605,6 +618,12 @@ def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_su
     img_cell = get_picture(folder_name + '/' + picture_name + cell_suffix)[0]
     # soma
     img_nucl = get_picture(folder_name + '/' + picture_name + nucl_suffix)[0]
+
+    if h5_flag:
+        img_mito_bin = read_h5(folder_name + '/' + picture_name + mito_bin_suffix)
+    else:
+        img_mito_bin, _ = get_picture(folder_name + '/' + picture_name + mito_bin_suffix)
+    img_mito_bin = booleanizer(img_mito_bin)
 
     info_cell = get_masks(img_cell)
     cell_labels = info_cell[0]
@@ -651,11 +670,7 @@ def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_su
         binarized mitochondria could be obtained in program from mito_raw
         '''
 
-    
-        mito_bin = read_h5(folder_name + '/' + picture_name + mito_bin_suffix)
-
-
-        mito_bin = mito_bin[cell_box]
+        mito_bin = img_mito_bin[cell_box]
 
 
         mito_bin = apply_mask(mito_bin, cell_mask).astype(bool)
@@ -687,10 +702,6 @@ def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_su
         results_cell.loc[:,'cell_code'] = picture_name + '_' + str(cell_label)
 
 
-        for x, y in info.items():
-            results_cell.loc[:, x] = y
-        
-
         
         # I leave this comment because it's funny
         ### TRY TO UNDERSTAND WHY THIS IS WORKING
@@ -701,9 +712,33 @@ def picture_analysis_general(folder_name, picture_name, mito_suffix, mito_bin_su
         results_mito_pic = pd.concat([results_mito_pic, results_mito_cell])
         results_pic = pd.concat([results_pic, results_cell])
 
+        c_range, c_data, c_mito_data = process_analysis(np.ones_like(mito_bin), nucl_dist, mito_bin, res, step=0.02)
+        dist_df = pd.DataFrame({'pict_code': picture_name,
+                                
+                                'cell_code': picture_name + '_' + str(cell_label),
+                                'range': c_range,
+                                'vol': c_data,
+                                'mito_vol': c_mito_data})
+
         print(' - DONE')
 
-    return results_pic, results_mito_pic
+    return results_pic, results_mito_pic, dist_df
+
+def booleanizer(pic):
+    vals = np.unique(pic)
+
+    if len(vals) != 2:
+        raise ValueError(f'binary contains {len(vals)} values')
+    else:
+        how_many_voxels = []
+        for v in vals:
+            how_many_voxels.append(np.sum(pic == v))
+            
+    background_mask = pic == vals[np.argmax(how_many_voxels)]
+    pic[background_mask] = 0
+    pic[~background_mask] = 1
+    
+    return pic.astype(bool)
 
 def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
     '''
@@ -722,8 +757,7 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
     # mitochondria results
     mito_bin = mito_bin.astype(bool)
     element_n, element_info, _ = mito_analysis(mito_bin, res, minimum_vol = minimum_vol)
-
-
+ 
     if element_n == 0:
         results_mito_cell.loc[0, 'mito_label'] = np.nan
         results_mito_cell.loc[0, 'n_branches'] = np.nan
@@ -734,10 +768,11 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
         results_mito_cell.loc[0, 'diameter'] = np.nan
         results_mito_cell.loc[0, 'surface'] = np.nan
         results_mito_cell.loc[0, 'sphericity'] = np.nan
-        results_mito_cell.loc[0, 'soma_dist'] = np.nan
+        results_mito_cell.loc[0, 'dist'] = np.nan
+        results_mito_cell.loc[0, 'skel_voxels'] = np.nan
         results_mito_cell.loc[0, 'compartment'] = np.nan
         results_mito_cell.loc[0, 'element_type'] = np.nan
-        results_mito_cell.loc[0, 'skel_voxels'] = np.nan
+        
     else:
         for m in range(element_n):
             results_mito_cell.loc[m, 'mito_label'] = m
@@ -749,9 +784,8 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
             results_mito_cell.loc[m, 'diameter'] = element_info['diameter'][m]
             results_mito_cell.loc[m, 'surface'] = element_info['surface'][m]
             results_mito_cell.loc[m, 'sphericity'] = element_info['sphericity'][m]
-            results_mito_cell.loc[m, 'soma_dist'] = soma_dist[element_info['coords'][m]]
+            results_mito_cell.loc[m, 'dist'] = soma_dist[element_info['coords'][m]]
             results_mito_cell.loc[m, 'skel_voxels'] = element_info['skel_voxels'][m]
-
             results_mito_cell.loc[m, 'compartment'] = label_masks[element_info['coords'][m]]
 
             if element_info['branches'][m] == 0:
@@ -774,8 +808,9 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
         results_cell.loc[comp-1, 'compartment'] = comp
 
         results_cell.loc[comp-1, 'volume'] = np.sum(current_compartment)*voxel_vol
-        results_cell.loc[comp-1, 'mito_volume'] = current_compartment_mito['volume'].sum()
-        results_cell.loc[comp-1, 'avg_mito_volume'] = current_compartment_mito['volume'].mean()
+        results_cell.loc[comp-1, 'mito_volume'] = np.sum(apply_mask(mito_bin, current_compartment))*voxel_vol
+        # results_cell.loc[comp-1, 'mito_volume'] = current_compartment_mito['volume'].sum()
+
         soma_dist_on_current = ma.masked_array(soma_dist, ~current_compartment)
 
         # the length is not super accurate for cycling objects, in that case I need to use the length from the skeleton
@@ -818,6 +853,8 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
         results_cell.loc[comp-1, 'tot_surface'] = current_compartment_mito['surface'].sum()
         results_cell.loc[comp-1, 'avg_surface'] = current_compartment_mito['surface'].mean()
 
+        results_cell.loc[comp-1, 'skel_voxels'] = current_compartment_mito['skel_voxels'].sum()
+
         # weighted sphericity (by volume)
         try:
             results_cell.loc[comp-1, 'avg_sphericity'] = np.average(current_compartment_mito['sphericity'], weights=current_compartment_mito['volume'])
@@ -838,7 +875,6 @@ def cell_analysis(mito_bin, label_masks, soma_dist, res, minimum_vol = 0):
         results_cell.loc[comp-1, 'tot_n_endpoints'] = current_compartment_mito['n_endpoints'].sum()
         results_cell.loc[comp-1, 'avg_n_endpoints'] = current_compartment_mito['n_endpoints'].mean()
 
-    
     return results_cell, results_mito_cell
 
 def mito_analysis(mito_bin, res, minimum_vol = 0):
@@ -963,7 +999,7 @@ def mito_analysis(mito_bin, res, minimum_vol = 0):
         element_volumes[l-1] = np.sum(current_blob)*np.prod(res)
 
         element_areas.append(surface_area_crofton(current_blob, res))
-        element_skel_voxels.append(len(node_coords))
+        element_skel_voxels.append(len(node_coords[0]))
 
 
 
@@ -1834,6 +1870,14 @@ def strahler_analysis(mask, soma, res, compartment_annotation=None, show = False
     return branching_df, G
 
 
+
+
+
+
+
+
+
+
 ###########################################################
 '''functions to perform strahler analysis'''
 ###########################################################
@@ -2024,3 +2068,4 @@ def connection_corrector(image):
     #print(f"Fixed components (6-connectivity): {num_labels_fixed}")
 
     return image_fixed
+        
