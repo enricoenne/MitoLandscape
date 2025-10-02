@@ -2,21 +2,48 @@
 analysis of mitochondria localization, quantity and morphology
 
 
+## to use the code on your own
 
+### installation
 
+- install Python ([Python download](https://www.python.org/downloads/)), tested version is 3.11.11
+  
+- install conda ([conda download](https://www.anaconda.com/download))
 
+- download the code/clone the repository
 
-### to use the code on your own
+- open Anaconda Prompt
 
-clone the repository
+- move to MitoLandascape directory
 
-create a virtual environment with
+`cd <your-directory-folder>`
+
+- create a virtual environment with
 
 `conda env create -f MitoLandscape-env.yml`
 
-name of the environment is `MitoLandscape-env`
+the name of the environment is `MitoLandscape-env`
+
+Now you should have everything ready!
+
+### let's start
+
+We have different notebooks, showcasing the different analysis available.
+
+All the necessary data to run the code is available on [Zenodo](https://zenodo.org/records/16037033). The necessary data for each example is locally downloaded at the start of the notebooks.
+
+- example_diagram
+
+- example_cell_analysis
+
+- example_picture_analysis
+
+- example_branching
 
 
+## data availability
+
+Example pictures are stored at [Image examples for MitoLandscape analysis pipeline](https://zenodo.org/records/16037033)
 
 
 ## license
