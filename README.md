@@ -33,6 +33,8 @@ We have different notebooks, showcasing the different analysis available.
 All the necessary data to run the code is available on [Zenodo](https://zenodo.org/records/16037033). The necessary data for each example is locally downloaded at the start of the notebooks.
 
 - example_diagram
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](
+https://colab.research.google.com/github/enricoenne/MitoLandscape/blob/main/example_diagram.ipynb)
 
 - example_cell_analysis
 
