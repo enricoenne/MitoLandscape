@@ -111,7 +111,7 @@ def get_zenodo(filename_prefix, output_dir = Path.cwd() / 'example_data', doi = 
 
     print('download complete')
 
-    return output_dir
+    return str(output_dir)
 
 ###########################################################
 '''plotting utilities'''
